@@ -1,0 +1,6 @@
+name: latency_spike
+latency:
+  fixed_ms: 100
+  jitter_ms: 25
+  probability: 1.0
+  seed: 7

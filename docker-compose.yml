@@ -1,0 +1,12 @@
+services:
+  solace:
+    image: solace/solace-pubsub-standard:latest
+    container_name: solace-trading-lab-broker
+    ports:
+      - "8080:8080"   # SEMP management
+      - "55555:55555" # SMF
+      - "8008:8008"   # Web transport
+    environment:
+      - username_admin_globalaccesslevel=admin
+      - username_admin_password=admin
+    shm_size: "1g"

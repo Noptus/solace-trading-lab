@@ -1,0 +1,7 @@
+name: broker_disconnect
+description: Placeholder scenario for Phase 2 broker reconnect experiments.
+latency:
+  fixed_ms: 0
+  jitter_ms: 0
+  probability: 1.0
+  seed: 1
