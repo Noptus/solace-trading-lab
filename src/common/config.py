@@ -1,8 +1,4 @@
-"""Runtime configuration for local services.
-
-Settings are environment-driven so the same code can run in tests, from shell
-scripts, or against the Dockerized Solace broker without global constants.
-"""
+"""Runtime configuration and topic construction."""
 
 from __future__ import annotations
 
@@ -32,44 +28,47 @@ class Settings(BaseSettings):
     symbol: str = "FOO"
     market_data_depth: int = Field(default=10, gt=0)
     in_memory_bus: bool = False
-    exchange_http_port: int = Field(default=9001, gt=0)
+    venue_http_port: int = Field(default=9001, gt=0)
 
     def normalized(self) -> Self:
-        """Return a copy with normalized human-entered values."""
+        """Normalize operator-provided values."""
 
-        return self.model_copy(update={"symbol": self.symbol.upper(), "topic_prefix": self.topic_prefix.strip("/")})
+        return self.model_copy(
+            update={"symbol": self.symbol.upper(), "topic_prefix": self.topic_prefix.strip("/")}
+        )
+
+    def with_client_name(self, suffix: str) -> Self:
+        """Return a copy with a unique client name for multi-service deployments."""
+
+        return self.model_copy(update={"client_name": f"{self.client_name}-{suffix}"})
 
 
 class Topics:
-    """Construct broker topics from one prefix.
-
-    Keeping topic construction centralized avoids services silently disagreeing
-    about routing strings, which is a common failure mode in pub/sub examples.
-    """
+    """Construct broker topics from one normalized prefix."""
 
     def __init__(self, prefix: str = "solace-lab") -> None:
         self.prefix = prefix.strip("/")
 
-    def exchange_orders(self, symbol: str) -> str:
-        return f"{self.prefix}/exchange/orders/{symbol.upper()}"
+    def venue_orders(self, symbol: str) -> str:
+        return f"{self.prefix}/venue/orders/{symbol.upper()}"
 
-    def exchange_order_wildcard(self) -> str:
-        return f"{self.prefix}/exchange/orders/*"
+    def venue_order_wildcard(self) -> str:
+        return f"{self.prefix}/venue/orders/*"
 
-    def exchange_acks(self, symbol: str) -> str:
-        return f"{self.prefix}/exchange/acks/{symbol.upper()}"
+    def venue_acks(self, symbol: str) -> str:
+        return f"{self.prefix}/venue/acks/{symbol.upper()}"
 
-    def exchange_fills(self, symbol: str) -> str:
-        return f"{self.prefix}/exchange/fills/{symbol.upper()}"
+    def venue_fills(self, symbol: str) -> str:
+        return f"{self.prefix}/venue/fills/{symbol.upper()}"
 
-    def exchange_fill_wildcard(self) -> str:
-        return f"{self.prefix}/exchange/fills/*"
+    def venue_fill_wildcard(self) -> str:
+        return f"{self.prefix}/venue/fills/*"
 
-    def exchange_book(self, symbol: str) -> str:
-        return f"{self.prefix}/exchange/book/{symbol.upper()}"
+    def venue_book(self, symbol: str) -> str:
+        return f"{self.prefix}/venue/book/{symbol.upper()}"
 
-    def exchange_book_wildcard(self) -> str:
-        return f"{self.prefix}/exchange/book/*"
+    def venue_book_wildcard(self) -> str:
+        return f"{self.prefix}/venue/book/*"
 
     def md_l1(self, symbol: str) -> str:
         return f"{self.prefix}/md/L1/{symbol.upper()}"
@@ -101,6 +100,6 @@ class Topics:
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Cache settings so services share one parsed environment view."""
+    """Return cached service settings."""
 
     return Settings().normalized()

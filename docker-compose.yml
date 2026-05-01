@@ -3,8 +3,8 @@ services:
     image: solace/solace-pubsub-standard:latest
     container_name: solace-trading-lab-broker
     ports:
+      - "${STL_SOLACE_PORT:-55555}:55555"
       - "8080:8080"   # SEMP management
-      - "55555:55555" # SMF
       - "8008:8008"   # Web transport
     environment:
       - username_admin_globalaccesslevel=admin

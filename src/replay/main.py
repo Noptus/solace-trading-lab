@@ -19,6 +19,7 @@ def run() -> None:
     play_parser = subparsers.add_parser("play")
     play_parser.add_argument("path", type=Path)
     play_parser.add_argument("--realtime", action="store_true")
+    play_parser.add_argument("--speed", type=float, default=1.0, help="Playback speed multiplier")
     args = parser.parse_args()
 
     if args.command == "record":
@@ -29,7 +30,7 @@ def run() -> None:
         finally:
             recorder.close()
     else:
-        ReplayPlayer(args.path).play(realtime=args.realtime)
+        ReplayPlayer(args.path).play(realtime=args.realtime, speed=args.speed)
 
 
 if __name__ == "__main__":

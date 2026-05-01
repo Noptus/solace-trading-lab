@@ -1,1 +1,1 @@
-"""Market data service components that translate exchange events into L1/L2/trades."""
+"""Market data components that translate venue events into L1/L2/trades."""

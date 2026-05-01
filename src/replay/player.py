@@ -26,17 +26,12 @@ class ReplayPlayer:
         self.bus = bus or SolaceClient(self.settings)
 
     def load(self) -> list[RecordedMessage]:
-        """Load and sequence-sort the recording before playback."""
+        """Load the recording in sequence order."""
 
         return sorted(load_recording(self.input_path), key=lambda message: message.sequence)
 
     def play(self, *, realtime: bool = False, speed: float = 1.0) -> list[RecordedMessage]:
-        """Replay all messages.
-
-        `realtime=False` is the deterministic default for tests and what-if
-        experiments.  Realtime playback is available for demos that want human
-        observable delays.
-        """
+        """Replay messages with optional timestamp pacing."""
 
         if speed <= 0:
             raise ValueError("speed must be positive")

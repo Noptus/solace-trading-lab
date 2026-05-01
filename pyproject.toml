@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-solace-exchange = "exchange.main:run"
+solace-venue = "exchange.main:run"
 solace-market-data = "market_data.main:run"
 solace-strategy = "strategy.main:run"
 solace-replay = "replay.main:run"
@@ -31,7 +31,3 @@ packages = ["src/common", "src/exchange", "src/market_data", "src/strategy", "sr
 addopts = "-q"
 pythonpath = ["src"]
 testpaths = ["tests"]
-
-[tool.ruff]
-line-length = 100
-target-version = "py312"

@@ -1,36 +1,34 @@
-"""Strategy base classes.
-
-Strategies consume market-data events and produce orders, but they do not know
-whether those events came from live Solace, replay, or a unit test.  This is the
-boundary that makes strategy behavior deterministic and benchmarkable.
-"""
+"""Strategy abstractions for market data, fills, and order publication."""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import TypeAlias
 
 from common.config import Settings, Topics, get_settings
-from common.models import Fill, MarketData, Order
+from common.models import CancelRequest, Fill, MarketData, Order, Price, Qty
 from common.solace_client import MessageBus, MessageEnvelope, SolaceClient
+
+OrderIds: TypeAlias = set[str]
 
 
 @dataclass(slots=True)
 class Position:
     """Inventory and cash state for one symbol."""
 
-    inventory: int = 0
-    cash: Decimal = Decimal("0")
+    inventory: Qty = 0
+    cash: Price = Decimal("0")
 
-    def mark_to_market(self, mid_price: Decimal) -> Decimal:
+    def mark_to_market(self, mid_price: Price) -> Price:
         """Return cash plus inventory valued at a supplied mid price."""
 
         return self.cash + Decimal(self.inventory) * mid_price
 
 
 class Strategy(ABC):
-    """Abstract strategy wired to market data, fills, and order publication."""
+    """Base strategy wired to market data, fills, and order publication."""
 
     def __init__(
         self,
@@ -55,7 +53,7 @@ class Strategy(ABC):
         self.bus.connect()
         self.bus.subscribe(self.topics.md_l1(self.symbol), self.handle_market_data_envelope)
         self.bus.subscribe(self.topics.md_trades(self.symbol), self.handle_market_data_envelope)
-        self.bus.subscribe(self.topics.exchange_fills(self.symbol), self.handle_fill_envelope)
+        self.bus.subscribe(self.topics.venue_fills(self.symbol), self.handle_fill_envelope)
 
     def handle_market_data_envelope(self, envelope: MessageEnvelope) -> None:
         data = MarketData.model_validate(envelope.payload)
@@ -67,20 +65,28 @@ class Strategy(ABC):
         self.on_fill(fill)
 
     def send_order(self, order: Order) -> None:
-        """Publish an order and retain it for deterministic accounting."""
+        """Publish an order and retain it for accounting."""
 
         self.orders_sent.append(order)
-        self.bus.publish(self.topics.exchange_orders(order.symbol), order)
+        self.bus.publish(self.topics.venue_orders(order.symbol), order)
+
+    def cancel_order(self, request: CancelRequest) -> None:
+        """Publish a cancel request to the venue."""
+
+        payload = request.to_payload()
+        payload["command"] = "CANCEL"
+        self.bus.publish(self.topics.venue_orders(request.symbol), payload)
 
     def on_fill(self, fill: Fill) -> None:
         """Update P&L only for fills involving this strategy."""
 
         touched = False
-        if fill.buyer_order_id in {order.order_id for order in self.orders_sent}:
+        own_order_ids: OrderIds = {order.order_id for order in self.orders_sent}
+        if fill.buyer_order_id in own_order_ids:
             self.position.inventory += fill.quantity
             self.position.cash -= fill.price * fill.quantity
             touched = True
-        if fill.seller_order_id in {order.order_id for order in self.orders_sent}:
+        if fill.seller_order_id in own_order_ids:
             self.position.inventory -= fill.quantity
             self.position.cash += fill.price * fill.quantity
             touched = True

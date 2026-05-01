@@ -1,3 +1,5 @@
+"""Integration tests for matching and market data publication."""
+
 from __future__ import annotations
 
 from decimal import Decimal
@@ -43,7 +45,7 @@ def test_matching_engine_publishes_acks_fills_and_market_data() -> None:
     feed.start()
     bus.subscribe(topics.md_l1("FOO"), observed_md.append)
     bus.subscribe(topics.md_trades("FOO"), observed_md.append)
-    bus.subscribe(topics.exchange_fills("FOO"), observed_fills.append)
+    bus.subscribe(topics.venue_fills("FOO"), observed_fills.append)
 
     engine.process_order(make_order("sell", Side.SELL, 10, "100.00", "seller"))
     published = engine.process_order(make_order("buy", Side.BUY, 4, "100.00", "buyer"))
@@ -63,9 +65,9 @@ def test_engine_subscribes_to_order_topic_payloads() -> None:
     acks: list[MessageEnvelope] = []
 
     engine.start()
-    bus.subscribe(topics.exchange_acks("FOO"), acks.append)
+    bus.subscribe(topics.venue_acks("FOO"), acks.append)
     bus.publish(
-        topics.exchange_orders("FOO"),
+        topics.venue_orders("FOO"),
         make_order("bid", Side.BUY, 10, "99.50", "buyer").to_payload(),
     )
 

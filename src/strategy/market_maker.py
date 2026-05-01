@@ -1,31 +1,37 @@
-"""Deterministic toy market maker.
-
-The goal is educational, not profitable trading.  The strategy quotes around
-the observed mid price and skews quotes away from inventory so learners can see
-how fills, inventory, and spread capture interact.
-"""
+"""Deterministic example market-making strategy."""
 
 from __future__ import annotations
 
-from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
+from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
 
-from common.models import MarketData, MarketDataKind, Order, OrderType, Side, TimeInForce
+from common.models import (
+    CancelRequest,
+    MarketData,
+    MarketDataKind,
+    Nanos,
+    Order,
+    OrderType,
+    Price,
+    Qty,
+    Side,
+    TimeInForce,
+)
 from strategy.base import Strategy
 
 
 class MarketMaker(Strategy):
-    """Quote a fixed spread around L1 mid and apply a simple inventory skew."""
+    """Quote fixed spread around L1 mid with inventory skew."""
 
     def __init__(
         self,
         strategy_id: str,
         symbol: str,
         *,
-        quote_size: int = 10,
-        spread: Decimal = Decimal("0.10"),
-        tick_size: Decimal = Decimal("0.01"),
-        inventory_skew: Decimal = Decimal("0.01"),
-        max_inventory: int = 100,
+        quote_size: Qty = 10,
+        spread: Price = Decimal("0.10"),
+        tick_size: Price = Decimal("0.01"),
+        inventory_skew: Price = Decimal("0.01"),
+        max_inventory: Qty = 100,
         **kwargs: object,
     ) -> None:
         super().__init__(strategy_id, symbol, **kwargs)
@@ -35,15 +41,26 @@ class MarketMaker(Strategy):
         self.inventory_skew = inventory_skew
         self.max_inventory = max_inventory
         self._order_sequence = 0
+        self._active_bid_id: str | None = None
+        self._active_ask_id: str | None = None
+        self._last_quoted_bid: Price | None = None
+        self._last_quoted_ask: Price | None = None
 
     def on_market_data(self, data: MarketData) -> list[Order]:
-        """Generate bid/ask orders from L1 data only."""
+        """Generate bid/ask orders from L1 data only, canceling stale quotes first."""
 
         if data.kind is not MarketDataKind.L1 or data.symbol != self.symbol:
             return []
         bid_price = data.payload.get("bid_price")
         ask_price = data.payload.get("ask_price")
         if bid_price is None or ask_price is None:
+            return []
+
+        if (
+            self._last_quoted_bid is not None
+            and Decimal(str(bid_price)) == self._last_quoted_bid
+            and Decimal(str(ask_price)) == self._last_quoted_ask
+        ):
             return []
 
         best_bid = Decimal(str(bid_price))
@@ -61,15 +78,39 @@ class MarketMaker(Strategy):
             quote_bid = best_bid
             quote_ask = best_ask
 
+        self._cancel_active_quotes()
+
         orders: list[Order] = []
         timestamp_ns = int(data.timestamp_ns)
         if self.position.inventory < self.max_inventory:
-            orders.append(self._new_limit(Side.BUY, quote_bid, timestamp_ns))
+            order = self._new_limit(Side.BUY, quote_bid, timestamp_ns)
+            self._active_bid_id = order.order_id
+            orders.append(order)
         if self.position.inventory > -self.max_inventory:
-            orders.append(self._new_limit(Side.SELL, quote_ask, timestamp_ns))
+            order = self._new_limit(Side.SELL, quote_ask, timestamp_ns)
+            self._active_ask_id = order.order_id
+            orders.append(order)
+
+        self._last_quoted_bid = quote_bid
+        self._last_quoted_ask = quote_ask
         return orders
 
-    def _new_limit(self, side: Side, price: Decimal, timestamp_ns: int) -> Order:
+    def _cancel_active_quotes(self) -> None:
+        """Cancel previously placed quotes that are still resting."""
+
+        for order_id in (self._active_bid_id, self._active_ask_id):
+            if order_id is not None:
+                self.cancel_order(
+                    CancelRequest(
+                        order_id=order_id,
+                        symbol=self.symbol,
+                        trader_id=self.strategy_id,
+                    )
+                )
+        self._active_bid_id = None
+        self._active_ask_id = None
+
+    def _new_limit(self, side: Side, price: Price, timestamp_ns: Nanos) -> Order:
         self._order_sequence += 1
         return Order(
             order_id=f"{self.strategy_id}-{self.symbol}-{self._order_sequence:06d}",
@@ -83,11 +124,11 @@ class MarketMaker(Strategy):
             timestamp_ns=timestamp_ns,
         )
 
-    def _floor_to_tick(self, value: Decimal) -> Decimal:
+    def _floor_to_tick(self, value: Price) -> Price:
         ticks = (value / self.tick_size).to_integral_value(rounding=ROUND_FLOOR)
         return (ticks * self.tick_size).quantize(self.tick_size, rounding=ROUND_HALF_UP)
 
-    def _ceil_to_tick(self, value: Decimal) -> Decimal:
+    def _ceil_to_tick(self, value: Price) -> Price:
         ticks = (value / self.tick_size).to_integral_value(rounding=ROUND_FLOOR)
         if ticks * self.tick_size < value:
             ticks += 1

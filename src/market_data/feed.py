@@ -1,21 +1,17 @@
-"""Market data projection service.
-
-The exchange publishes facts: fills and book snapshots.  This module derives
-the lower-bandwidth views strategies normally consume: L1, L2, and trade prints.
-That separation keeps market-data latency and exchange matching independent.
-"""
+"""Market data projection from venue events."""
 
 from __future__ import annotations
 
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TypeAlias
 
 from common.config import Settings, Topics, get_settings
-from common.models import BookSnapshot, Fill, MarketData, MarketDataKind
+from common.models import BookSnapshot, Fill, MarketData, MarketDataKind, Payload
 from common.solace_client import MessageBus, MessageEnvelope, SolaceClient
 
-LatencyHook = Callable[[str, dict[str, object]], None]
+LatencyHook: TypeAlias = Callable[[str, Payload], None]
 
 
 @dataclass(slots=True)
@@ -27,7 +23,7 @@ class MarketDataPublication:
 
 
 class MarketDataFeed:
-    """Subscribe to exchange events and publish market data topics."""
+    """Project venue book and fill events into market data."""
 
     def __init__(
         self,
@@ -42,11 +38,11 @@ class MarketDataFeed:
         self.latency_hook = latency_hook
 
     def start(self) -> None:
-        """Connect and subscribe to exchange book/fill streams."""
+        """Subscribe to book and fill streams."""
 
         self.bus.connect()
-        self.bus.subscribe(self.topics.exchange_book_wildcard(), self.handle_book_envelope)
-        self.bus.subscribe(self.topics.exchange_fill_wildcard(), self.handle_fill_envelope)
+        self.bus.subscribe(self.topics.venue_book_wildcard(), self.handle_book_envelope)
+        self.bus.subscribe(self.topics.venue_fill_wildcard(), self.handle_fill_envelope)
 
     def handle_book_envelope(self, envelope: MessageEnvelope) -> None:
         snapshot = BookSnapshot.model_validate(envelope.payload)
@@ -91,7 +87,7 @@ class MarketDataFeed:
         return publications
 
     def publish_trade(self, fill: Fill) -> MarketDataPublication:
-        """Publish a trade print from an exchange fill."""
+        """Publish a trade print from a fill."""
 
         publication = MarketDataPublication(
             topic=self.topics.md_trades(fill.symbol),
@@ -114,9 +110,9 @@ class MarketDataFeed:
 
 
 def fixed_latency_hook(delay_ms: int) -> LatencyHook:
-    """Create a simple blocking latency hook for local demonstrations."""
+    """Create a blocking latency hook."""
 
-    def _hook(_topic: str, _payload: dict[str, object]) -> None:
+    def _hook(_topic: str, _payload: Payload) -> None:
         if delay_ms > 0:
             time.sleep(delay_ms / 1000)
 

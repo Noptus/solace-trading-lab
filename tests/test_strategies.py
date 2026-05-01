@@ -1,3 +1,5 @@
+"""Unit tests for strategy event handling."""
+
 from __future__ import annotations
 
 from decimal import Decimal
@@ -54,7 +56,7 @@ def test_strategy_start_publishes_orders_from_market_data() -> None:
     observed_orders: list[MessageEnvelope] = []
 
     strategy.start()
-    bus.subscribe(topics.exchange_orders("FOO"), observed_orders.append)
+    bus.subscribe(topics.venue_orders("FOO"), observed_orders.append)
     bus.publish(topics.md_l1("FOO"), l1_payload())
 
     assert len(observed_orders) == 2

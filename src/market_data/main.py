@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import time
+import signal
+import threading
 
 from common.config import get_settings
 from market_data.feed import MarketDataFeed
@@ -11,10 +12,15 @@ from market_data.feed import MarketDataFeed
 def run() -> None:
     """Run the feed as a long-lived Solace subscriber."""
 
-    feed = MarketDataFeed(settings=get_settings())
+    settings = get_settings().with_client_name("market-data")
+    feed = MarketDataFeed(settings=settings)
     feed.start()
-    while True:
-        time.sleep(1)
+
+    shutdown = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: shutdown.set())
+    signal.signal(signal.SIGINT, lambda *_: shutdown.set())
+    shutdown.wait()
+    feed.bus.close()
 
 
 if __name__ == "__main__":

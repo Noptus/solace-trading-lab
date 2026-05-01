@@ -1,10 +1,4 @@
-"""Deterministic price-time priority limit order book.
-
-The matching logic is deliberately pure Python and single-threaded.  That makes
-market microstructure behavior inspectable for learners and gives replay a
-stable reference implementation: same ordered input events, same fills and book
-state.
-"""
+"""Deterministic price-time priority limit order book."""
 
 from __future__ import annotations
 
@@ -12,7 +6,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
-from decimal import Decimal
+from typing import TypeAlias
 
 from common.models import (
     AmendRequest,
@@ -20,15 +14,19 @@ from common.models import (
     BookSnapshot,
     CancelRequest,
     Fill,
+    Nanos,
     Order,
     OrderAck,
+    OrderId,
     OrderStatus,
     OrderType,
+    Price,
+    Qty,
     Side,
     TimeInForce,
 )
 
-Clock = Callable[[], int]
+Clock: TypeAlias = Callable[[], Nanos]
 
 
 @dataclass(slots=True)
@@ -36,13 +34,16 @@ class RestingOrder:
     """Internal order state held in a price level FIFO queue."""
 
     order: Order
-    remaining_quantity: int
+    remaining_quantity: Qty
     arrival_sequence: int
+
+
+BookSide: TypeAlias = dict[Price, deque[RestingOrder]]
 
 
 @dataclass(slots=True)
 class OrderBookResult:
-    """All exchange events produced by processing one command."""
+    """Venue events produced by processing one command."""
 
     acks: list[OrderAck]
     fills: list[Fill]
@@ -55,8 +56,8 @@ class OrderBook:
     def __init__(self, symbol: str, *, clock: Clock | None = None) -> None:
         self.symbol = symbol.upper()
         self._clock = clock or time.time_ns
-        self._bids: dict[Decimal, deque[RestingOrder]] = {}
-        self._asks: dict[Decimal, deque[RestingOrder]] = {}
+        self._bids: BookSide = {}
+        self._asks: BookSide = {}
         self._orders: dict[str, RestingOrder] = {}
         self._seen_order_ids: set[str] = set()
         self._event_sequence = 0
@@ -64,7 +65,7 @@ class OrderBook:
 
     @property
     def sequence(self) -> int:
-        """Last state-change sequence number emitted by this book."""
+        """Last venue state sequence emitted by this book."""
 
         return self._event_sequence
 
@@ -181,10 +182,14 @@ class OrderBook:
                 )
             )
 
-        return OrderBookResult(acks=acks, fills=fills, snapshot=self.snapshot(timestamp_ns=timestamp_ns))
+        return OrderBookResult(
+            acks=acks,
+            fills=fills,
+            snapshot=self.snapshot(timestamp_ns=timestamp_ns),
+        )
 
     def cancel(self, request: CancelRequest) -> OrderBookResult:
-        """Cancel a resting order without touching the relative priority of others."""
+        """Cancel a resting order without moving other queue positions."""
 
         self._event_sequence += 1
         timestamp_ns = request.timestamp_ns or self._clock()
@@ -192,7 +197,12 @@ class OrderBook:
         if resting is None:
             return self._reject(request.order_id, request.symbol, "unknown order id", timestamp_ns)
         if resting.order.trader_id != request.trader_id:
-            return self._reject(request.order_id, request.symbol, "trader does not own order", timestamp_ns)
+            return self._reject(
+                request.order_id,
+                request.symbol,
+                "trader does not own order",
+                timestamp_ns,
+            )
 
         self._remove_resting(resting)
         ack = OrderAck(
@@ -205,7 +215,11 @@ class OrderBook:
             sequence=self._event_sequence,
             timestamp_ns=timestamp_ns,
         )
-        return OrderBookResult(acks=[ack], fills=[], snapshot=self.snapshot(timestamp_ns=timestamp_ns))
+        return OrderBookResult(
+            acks=[ack],
+            fills=[],
+            snapshot=self.snapshot(timestamp_ns=timestamp_ns),
+        )
 
     def amend(self, request: AmendRequest) -> OrderBookResult:
         """Cancel-replace a resting order and intentionally reset queue priority."""
@@ -216,14 +230,21 @@ class OrderBook:
         if resting is None:
             return self._reject(request.order_id, request.symbol, "unknown order id", timestamp_ns)
         if resting.order.trader_id != request.trader_id:
-            return self._reject(request.order_id, request.symbol, "trader does not own order", timestamp_ns)
+            return self._reject(
+                request.order_id,
+                request.symbol,
+                "trader does not own order",
+                timestamp_ns,
+            )
 
         old_remaining = resting.remaining_quantity
         self._remove_resting(resting)
         amended_order = resting.order.model_copy(
             update={
                 "quantity": request.new_quantity or old_remaining,
-                "price": request.new_price if request.new_price is not None else resting.order.price,
+                "price": (
+                    request.new_price if request.new_price is not None else resting.order.price
+                ),
                 "timestamp_ns": timestamp_ns,
             }
         )
@@ -245,18 +266,18 @@ class OrderBook:
         )
 
     @property
-    def best_bid_price(self) -> Decimal | None:
+    def best_bid_price(self) -> Price | None:
         """Highest resting buy price."""
 
         return max(self._bids) if self._bids else None
 
     @property
-    def best_ask_price(self) -> Decimal | None:
+    def best_ask_price(self) -> Price | None:
         """Lowest resting sell price."""
 
         return min(self._asks) if self._asks else None
 
-    def queue_position(self, order_id: str) -> int | None:
+    def queue_position(self, order_id: OrderId) -> Qty | None:
         """Return units ahead of an order at its price level."""
 
         resting = self._orders.get(order_id)
@@ -271,7 +292,12 @@ class OrderBook:
             ahead += candidate.remaining_quantity
         return None
 
-    def snapshot(self, *, depth: int | None = None, timestamp_ns: int | None = None) -> BookSnapshot:
+    def snapshot(
+        self,
+        *,
+        depth: int | None = None,
+        timestamp_ns: Nanos | None = None,
+    ) -> BookSnapshot:
         """Return aggregated book depth sorted by price priority."""
 
         return BookSnapshot(
@@ -284,10 +310,10 @@ class OrderBook:
 
     def _reject(
         self,
-        order_id: str,
+        order_id: OrderId,
         symbol: str,
         reason: str,
-        timestamp_ns: int,
+        timestamp_ns: Nanos,
     ) -> OrderBookResult:
         ack = OrderAck(
             order_id=order_id,
@@ -297,9 +323,13 @@ class OrderBook:
             timestamp_ns=timestamp_ns,
             reason=reason,
         )
-        return OrderBookResult(acks=[ack], fills=[], snapshot=self.snapshot(timestamp_ns=timestamp_ns))
+        return OrderBookResult(
+            acks=[ack],
+            fills=[],
+            snapshot=self.snapshot(timestamp_ns=timestamp_ns),
+        )
 
-    def _can_match(self, side: Side, price: Decimal | None, order_type: OrderType) -> bool:
+    def _can_match(self, side: Side, price: Price | None, order_type: OrderType) -> bool:
         if side is Side.BUY:
             best_ask = self.best_ask_price
             if best_ask is None:
@@ -310,7 +340,7 @@ class OrderBook:
             return False
         return order_type is OrderType.MARKET or (price is not None and price <= best_bid)
 
-    def _add_resting(self, order: Order, remaining: int, arrival_sequence: int) -> RestingOrder:
+    def _add_resting(self, order: Order, remaining: Qty, arrival_sequence: int) -> RestingOrder:
         if order.price is None:
             raise ValueError("only priced orders can rest")
         resting = RestingOrder(
@@ -342,8 +372,8 @@ class OrderBook:
         self,
         taker: Order,
         maker: Order,
-        price: Decimal,
-        quantity: int,
+        price: Price,
+        quantity: Qty,
     ) -> Fill:
         self._trade_sequence += 1
         buyer_order_id = taker.order_id if taker.side is Side.BUY else maker.order_id
@@ -365,7 +395,7 @@ class OrderBook:
 
     @staticmethod
     def _levels(
-        book: dict[Decimal, deque[RestingOrder]],
+        book: BookSide,
         *,
         reverse: bool,
         depth: int | None,

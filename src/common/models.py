@@ -1,33 +1,31 @@
-"""Canonical event schemas used by every service.
-
-The lab is intentionally event-sourced: services should exchange durable facts
-instead of Python objects with hidden process state.  These Pydantic models make
-that contract explicit and keep replay deterministic because every downstream
-consumer sees the same validated payload.
-"""
+"""Pydantic schemas for venue, market data, chaos, and replay events."""
 
 from __future__ import annotations
 
 import time
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any, ClassVar, Self
+from typing import Any, ClassVar, Self, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+OrderId: TypeAlias = str
+Symbol: TypeAlias = str
+Price: TypeAlias = Decimal
+Qty: TypeAlias = int
+Nanos: TypeAlias = int
+Sequence: TypeAlias = int
+Payload: TypeAlias = dict[str, Any]
 
-def utc_now_ns() -> int:
-    """Return wall-clock nanoseconds for live services.
 
-    Tests and replay pass explicit timestamps or injected clocks.  Keeping this
-    helper in one place makes the non-deterministic edge obvious.
-    """
+def utc_now_ns() -> Nanos:
+    """Return wall-clock nanoseconds for live services."""
 
     return time.time_ns()
 
 
 class JsonModel(BaseModel):
-    """Base model with strict validation and JSON-safe dumping helpers."""
+    """Strict model with broker-safe serialization helpers."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(
         extra="forbid",
@@ -36,19 +34,19 @@ class JsonModel(BaseModel):
         validate_assignment=True,
     )
 
-    def to_payload(self) -> dict[str, Any]:
-        """Return a broker-safe payload with Decimals and enums encoded."""
+    def to_payload(self) -> Payload:
+        """Encode Decimals and enums for broker JSON."""
 
         return self.model_dump(mode="json")
 
     def to_json(self) -> str:
-        """Serialize using the same encoding path used for broker publishing."""
+        """Serialize through the broker encoding path."""
 
         return self.model_dump_json()
 
     @classmethod
-    def from_payload(cls, payload: dict[str, Any] | str | bytes) -> Self:
-        """Validate a JSON string/bytes or decoded mapping into a typed event."""
+    def from_payload(cls, payload: Payload | str | bytes) -> Self:
+        """Validate broker JSON into a typed event."""
 
         if isinstance(payload, str | bytes):
             return cls.model_validate_json(payload)
@@ -56,20 +54,20 @@ class JsonModel(BaseModel):
 
 
 class Side(StrEnum):
-    """Order side, named from the taker's perspective."""
+    """Order side from the taker perspective."""
 
     BUY = "BUY"
     SELL = "SELL"
 
     @property
-    def opposite(self) -> "Side":
-        """Return the contra side used when routing into the opposite book."""
+    def opposite(self) -> Side:
+        """Return the contra book side."""
 
         return Side.SELL if self is Side.BUY else Side.BUY
 
 
 class OrderType(StrEnum):
-    """Supported order styles for the MVP exchange."""
+    """Supported order styles."""
 
     LIMIT = "LIMIT"
     MARKET = "MARKET"
@@ -83,7 +81,7 @@ class TimeInForce(StrEnum):
 
 
 class OrderStatus(StrEnum):
-    """Execution report states emitted by the exchange."""
+    """Execution report states emitted by the venue."""
 
     ACCEPTED = "ACCEPTED"
     RESTING = "RESTING"
@@ -95,7 +93,7 @@ class OrderStatus(StrEnum):
 
 
 class MarketDataKind(StrEnum):
-    """Market data channels derived from exchange state changes."""
+    """Market data channels derived from venue state changes."""
 
     L1 = "L1"
     L2 = "L2"
@@ -110,32 +108,28 @@ class ChaosEventKind(StrEnum):
 
 
 class Order(JsonModel):
-    """A client order submitted to the exchange.
+    """Client order command with caller-supplied id for deterministic replay."""
 
-    The order id is required instead of generated here because deterministic
-    labs and replay should be able to recreate the exact same event stream.
-    """
-
-    order_id: str = Field(min_length=1)
-    symbol: str = Field(min_length=1)
+    order_id: OrderId = Field(min_length=1)
+    symbol: Symbol = Field(min_length=1)
     side: Side
-    quantity: int = Field(gt=0)
-    price: Decimal | None = Field(default=None, gt=Decimal("0"))
+    quantity: Qty = Field(gt=0)
+    price: Price | None = Field(default=None, gt=Decimal("0"))
     trader_id: str = Field(default="anonymous", min_length=1)
     order_type: OrderType = OrderType.LIMIT
     time_in_force: TimeInForce = TimeInForce.GTC
-    timestamp_ns: int = Field(default_factory=utc_now_ns, ge=0)
+    timestamp_ns: Nanos = Field(default_factory=utc_now_ns, ge=0)
 
     @field_validator("symbol")
     @classmethod
     def normalize_symbol(cls, value: str) -> str:
-        """Normalize symbols so topic names and books do not diverge by case."""
+        """Prevent symbol case from partitioning books and topics."""
 
         return value.upper()
 
     @model_validator(mode="after")
-    def validate_price_semantics(self) -> "Order":
-        """Reject ambiguous prices at the schema boundary."""
+    def validate_price_semantics(self) -> Order:
+        """Reject ambiguous order price semantics."""
 
         if self.order_type is OrderType.LIMIT and self.price is None:
             raise ValueError("limit orders require a price")
@@ -147,10 +141,10 @@ class Order(JsonModel):
 class CancelRequest(JsonModel):
     """Cancel an outstanding resting order by id."""
 
-    order_id: str = Field(min_length=1)
-    symbol: str = Field(min_length=1)
+    order_id: OrderId = Field(min_length=1)
+    symbol: Symbol = Field(min_length=1)
     trader_id: str = Field(default="anonymous", min_length=1)
-    timestamp_ns: int = Field(default_factory=utc_now_ns, ge=0)
+    timestamp_ns: Nanos = Field(default_factory=utc_now_ns, ge=0)
 
     @field_validator("symbol")
     @classmethod
@@ -159,18 +153,14 @@ class CancelRequest(JsonModel):
 
 
 class AmendRequest(JsonModel):
-    """Replace an outstanding order while preserving the external order id.
+    """Cancel-replace request that resets venue queue priority."""
 
-    Amends deliberately lose queue priority in the exchange implementation.
-    That mirrors common market behavior and keeps the educational model simple.
-    """
-
-    order_id: str = Field(min_length=1)
-    symbol: str = Field(min_length=1)
+    order_id: OrderId = Field(min_length=1)
+    symbol: Symbol = Field(min_length=1)
     trader_id: str = Field(default="anonymous", min_length=1)
-    new_quantity: int | None = Field(default=None, gt=0)
-    new_price: Decimal | None = Field(default=None, gt=Decimal("0"))
-    timestamp_ns: int = Field(default_factory=utc_now_ns, ge=0)
+    new_quantity: Qty | None = Field(default=None, gt=0)
+    new_price: Price | None = Field(default=None, gt=Decimal("0"))
+    timestamp_ns: Nanos = Field(default_factory=utc_now_ns, ge=0)
 
     @field_validator("symbol")
     @classmethod
@@ -179,20 +169,20 @@ class AmendRequest(JsonModel):
 
 
 class Fill(JsonModel):
-    """A trade caused by a taker order consuming a resting maker order."""
+    """Trade caused by a taker consuming a resting maker order."""
 
     fill_id: str = Field(min_length=1)
-    symbol: str = Field(min_length=1)
-    price: Decimal = Field(gt=Decimal("0"))
-    quantity: int = Field(gt=0)
-    maker_order_id: str = Field(min_length=1)
-    taker_order_id: str = Field(min_length=1)
-    buyer_order_id: str = Field(min_length=1)
-    seller_order_id: str = Field(min_length=1)
+    symbol: Symbol = Field(min_length=1)
+    price: Price = Field(gt=Decimal("0"))
+    quantity: Qty = Field(gt=0)
+    maker_order_id: OrderId = Field(min_length=1)
+    taker_order_id: OrderId = Field(min_length=1)
+    buyer_order_id: OrderId = Field(min_length=1)
+    seller_order_id: OrderId = Field(min_length=1)
     maker_trader_id: str = Field(min_length=1)
     taker_trader_id: str = Field(min_length=1)
-    sequence: int = Field(ge=1)
-    timestamp_ns: int = Field(ge=0)
+    sequence: Sequence = Field(ge=1)
+    timestamp_ns: Nanos = Field(ge=0)
 
     @field_validator("symbol")
     @classmethod
@@ -201,17 +191,17 @@ class Fill(JsonModel):
 
 
 class OrderAck(JsonModel):
-    """Execution report emitted after an order event changes exchange state."""
+    """Execution report emitted after an order command changes venue state."""
 
-    order_id: str = Field(min_length=1)
-    symbol: str = Field(min_length=1)
+    order_id: OrderId = Field(min_length=1)
+    symbol: Symbol = Field(min_length=1)
     status: OrderStatus
-    accepted_quantity: int = Field(default=0, ge=0)
-    remaining_quantity: int = Field(default=0, ge=0)
-    filled_quantity: int = Field(default=0, ge=0)
-    queue_position: int | None = Field(default=None, ge=0)
-    sequence: int = Field(ge=0)
-    timestamp_ns: int = Field(ge=0)
+    accepted_quantity: Qty = Field(default=0, ge=0)
+    remaining_quantity: Qty = Field(default=0, ge=0)
+    filled_quantity: Qty = Field(default=0, ge=0)
+    queue_position: Qty | None = Field(default=None, ge=0)
+    sequence: Sequence = Field(ge=0)
+    timestamp_ns: Nanos = Field(ge=0)
     reason: str | None = None
 
     @field_validator("symbol")
@@ -223,25 +213,21 @@ class OrderAck(JsonModel):
 class BookLevel(JsonModel):
     """Aggregated depth at one price level."""
 
-    price: Decimal = Field(gt=Decimal("0"))
-    quantity: int = Field(ge=0)
+    price: Price = Field(gt=Decimal("0"))
+    quantity: Qty = Field(ge=0)
     order_count: int = Field(ge=0)
 
 
 class L1Quote(JsonModel):
-    """Best bid and offer snapshot.
+    """Best bid and offer derived from aggregated depth."""
 
-    L1 is duplicated from L2 rather than inferred by consumers so replay and
-    strategy tests can subscribe to the minimal event they need.
-    """
-
-    symbol: str = Field(min_length=1)
-    bid_price: Decimal | None = None
-    bid_quantity: int = Field(default=0, ge=0)
-    ask_price: Decimal | None = None
-    ask_quantity: int = Field(default=0, ge=0)
-    sequence: int = Field(ge=0)
-    timestamp_ns: int = Field(ge=0)
+    symbol: Symbol = Field(min_length=1)
+    bid_price: Price | None = None
+    bid_quantity: Qty = Field(default=0, ge=0)
+    ask_price: Price | None = None
+    ask_quantity: Qty = Field(default=0, ge=0)
+    sequence: Sequence = Field(ge=0)
+    timestamp_ns: Nanos = Field(ge=0)
 
     @field_validator("symbol")
     @classmethod
@@ -252,11 +238,11 @@ class L1Quote(JsonModel):
 class BookSnapshot(JsonModel):
     """Point-in-time aggregated order book depth."""
 
-    symbol: str = Field(min_length=1)
+    symbol: Symbol = Field(min_length=1)
     bids: list[BookLevel] = Field(default_factory=list)
     asks: list[BookLevel] = Field(default_factory=list)
-    sequence: int = Field(ge=0)
-    timestamp_ns: int = Field(ge=0)
+    sequence: Sequence = Field(ge=0)
+    timestamp_ns: Nanos = Field(ge=0)
 
     @field_validator("symbol")
     @classmethod
@@ -264,7 +250,7 @@ class BookSnapshot(JsonModel):
         return value.upper()
 
     def l1(self) -> L1Quote:
-        """Derive best bid/offer from the already aggregated depth."""
+        """Derive top of book from aggregated depth."""
 
         best_bid = self.bids[0] if self.bids else None
         best_ask = self.asks[0] if self.asks else None
@@ -280,17 +266,13 @@ class BookSnapshot(JsonModel):
 
 
 class MarketData(JsonModel):
-    """Envelope for L1, L2, and trade-print market data.
-
-    A small envelope lets subscribers route by kind while still preserving the
-    raw typed payload for replay and later schema evolution.
-    """
+    """Typed market data envelope with a replay-safe payload."""
 
     kind: MarketDataKind
-    symbol: str = Field(min_length=1)
-    sequence: int = Field(ge=0)
-    timestamp_ns: int = Field(ge=0)
-    payload: dict[str, Any]
+    symbol: Symbol = Field(min_length=1)
+    sequence: Sequence = Field(ge=0)
+    timestamp_ns: Nanos = Field(ge=0)
+    payload: Payload
 
     @field_validator("symbol")
     @classmethod
@@ -305,14 +287,14 @@ class ChaosEvent(JsonModel):
     topic: str = Field(min_length=1)
     delay_ms: int = Field(default=0, ge=0)
     dropped: bool = False
-    sequence: int = Field(ge=1)
-    timestamp_ns: int = Field(default_factory=utc_now_ns, ge=0)
+    sequence: Sequence = Field(ge=1)
+    timestamp_ns: Nanos = Field(default_factory=utc_now_ns, ge=0)
 
 
 class RecordedMessage(JsonModel):
-    """A replayable broker message persisted as one JSON line."""
+    """Replayable broker message persisted as one JSON line."""
 
-    sequence: int = Field(ge=1)
+    sequence: Sequence = Field(ge=1)
     topic: str = Field(min_length=1)
-    payload: dict[str, Any]
-    timestamp_ns: int = Field(ge=0)
+    payload: Payload
+    timestamp_ns: Nanos = Field(ge=0)

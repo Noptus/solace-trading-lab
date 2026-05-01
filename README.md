@@ -1,119 +1,62 @@
 # Solace Trading Lab
 
-A deterministic, event-driven trading systems lab for learning limit order
-books, market data, strategy behavior, replay, and infrastructure effects with
-Solace PubSub+ as the message backbone.
+Deterministic trading infrastructure lab for order matching, market data, replay, and faults.
+Runs a simulated venue over Solace PubSub+ with HTTP endpoints for local control.
 
-This is not a real trading system. It is an educational simulator.
-
-## What Is Included
-
-- Price-time priority limit order book with queue position tracking
-- Matching engine that publishes order acks, fills, and book snapshots
-- Solace PubSub+ wrapper plus deterministic in-memory bus for tests
-- Market data feed that derives L1, L2, and trade-print topics
-- Market maker strategy with inventory-aware quote skew
-- Latency chaos injector and replay recorder/player
-- Docker Compose for a local Solace PubSub+ broker
-
-## Requirements
-
-- Python 3.12+
-- `uv`
-- Docker and Docker Compose
-
-## Quick Start
-
-Install dependencies and run tests:
+## Run
 
 ```bash
 uv sync
 uv run pytest
 ```
 
-Start the Solace broker:
-
 ```bash
 ./scripts/setup_solace.sh
-```
-
-Run the exchange, market data feed, and example strategy:
-
-```bash
 ./scripts/run_all.sh
 ```
 
-The broker management UI is available at `http://localhost:8080` with
-`admin/admin`. The exchange HTTP helper runs at `http://localhost:9001`.
-
-## Submit A Test Order
-
-With the services running, submit a resting sell order:
+Submit a resting order:
 
 ```bash
 curl -X POST http://localhost:9001/orders \
   -H 'content-type: application/json' \
-  -d '{
-    "order_id": "demo-sell-1",
-    "symbol": "FOO",
-    "side": "SELL",
-    "quantity": 10,
-    "price": "100.00",
-    "trader_id": "demo"
-  }'
+  -d '{"order_id":"sell-1","symbol":"FOO","side":"SELL","quantity":10,"price":"100.00"}'
 ```
 
-Then submit a crossing buy order:
-
-```bash
-curl -X POST http://localhost:9001/orders \
-  -H 'content-type: application/json' \
-  -d '{
-    "order_id": "demo-buy-1",
-    "symbol": "FOO",
-    "side": "BUY",
-    "quantity": 4,
-    "price": "100.00",
-    "trader_id": "demo"
-  }'
-```
-
-Inspect the book:
+Inspect venue state:
 
 ```bash
 curl http://localhost:9001/book/FOO
 ```
 
-## Topic Layout
+## Architecture
 
-- `solace-lab/exchange/orders/{symbol}`
-- `solace-lab/exchange/acks/{symbol}`
-- `solace-lab/exchange/fills/{symbol}`
-- `solace-lab/exchange/book/{symbol}`
-- `solace-lab/md/L1/{symbol}`
-- `solace-lab/md/L2/{symbol}`
-- `solace-lab/md/trades/{symbol}`
-- `solace-lab/chaos/events`
-- `solace-lab/replay/control`
-
-## Determinism
-
-The core exchange is pure and single-threaded. Tests inject deterministic clocks
-and use explicit order ids. Replay stores ordered JSONL messages so the same
-input sequence can be published again without wall-clock timing unless realtime
-playback is requested.
-
-## Development
-
-Run a single test file:
-
-```bash
-uv run pytest tests/test_orderbook.py
+```text
+                +------------------+
+                | Solace PubSub+   |
+                +------------------+
+                  ^      ^      ^
+                  |      |      |
++----------+   orders   fills   book     +-------------+
+| Strategy | ---------> Venue ----------> | Market Data |
++----------+             |                +-------------+
+                         |
+                      recorder
+                         |
+                      replay
 ```
 
-Run services against the in-memory bus for local single-process experiments by
-setting:
+Core modules:
 
-```bash
-export STL_IN_MEMORY_BUS=true
-```
+- `src/exchange/orderbook.py`: deterministic price-time priority book
+- `src/exchange/matching_engine.py`: command routing and event publication
+- `src/market_data/feed.py`: L1, L2, and trade-print projection
+- `src/strategy/market_maker.py`: deterministic example strategy
+- `src/replay`: JSONL recording and playback
+- `src/chaos`: deterministic latency injection
+
+## Extend
+
+Add schemas in `src/common/models.py`, route topics through `src/common/config.py`, and keep
+matching logic isolated from transport code. Use `InMemoryBroker` in tests and inject clocks for
+deterministic assertions. Add scenario files under `scenarios/` for repeatable fault cases.
