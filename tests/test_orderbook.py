@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from common.models import CancelRequest, Order, OrderStatus, Side
-from exchange.orderbook import OrderBook
+import pytest
+
+from common.models import AmendRequest, CancelRequest, Order, OrderStatus, Side
+from exchange.orderbook import BookInvariantViolation, OrderBook
 
 
 class DeterministicClock:
@@ -90,3 +92,37 @@ def test_order_ids_cannot_be_reused_after_fill() -> None:
 
     assert duplicate.acks[0].status is OrderStatus.REJECTED
     assert duplicate.acks[0].reason == "duplicate order id"
+
+
+def test_invariant_report_summarizes_resting_liquidity_after_lifecycle() -> None:
+    book = OrderBook("FOO", clock=DeterministicClock())
+    book.submit(order("bid-1", Side.BUY, 5, "99.50", trader_id="alice"))
+    book.submit(order("ask-1", Side.SELL, 7, "100.50", trader_id="bob"))
+    book.amend(
+        AmendRequest(
+            order_id="bid-1",
+            symbol="FOO",
+            trader_id="alice",
+            new_quantity=3,
+            timestamp_ns=20,
+        )
+    )
+    book.cancel(CancelRequest(order_id="ask-1", symbol="FOO", trader_id="bob", timestamp_ns=30))
+
+    report = book.validate_invariants()
+
+    assert report.symbol == "FOO"
+    assert report.active_orders == 1
+    assert report.bid_levels == 1
+    assert report.ask_levels == 0
+    assert report.total_bid_quantity == 3
+    assert report.total_ask_quantity == 0
+
+
+def test_invariant_validation_detects_stale_order_index() -> None:
+    book = OrderBook("FOO", clock=DeterministicClock())
+    book.submit(order("bid-1", Side.BUY, 5, "99.50"))
+    book._bids.clear()
+
+    with pytest.raises(BookInvariantViolation, match="order index mismatch"):
+        book.validate_invariants()

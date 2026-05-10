@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import signal
 import threading
 from decimal import Decimal
@@ -15,7 +16,7 @@ from strategy.market_maker import MarketMaker
 
 settings = get_settings().with_client_name("strategy")
 strategy = MarketMaker(
-    "mm-001",
+    os.getenv("STL_STRATEGY_ID", "mm-001"),
     settings.symbol,
     settings=settings,
     quote_size=10,
@@ -60,12 +61,13 @@ def run() -> None:
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
 
-    port = settings.venue_http_port + 1
-    server_thread = threading.Thread(
-        target=lambda: uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning"),
-        daemon=True,
-    )
-    server_thread.start()
+    port = int(os.getenv("STL_STRATEGY_HTTP_PORT", str(settings.venue_http_port + 1)))
+    if port > 0:
+        server_thread = threading.Thread(
+            target=lambda: uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning"),
+            daemon=True,
+        )
+        server_thread.start()
     shutdown.wait()
     strategy.bus.close()
 

@@ -4,9 +4,24 @@ services:
     container_name: solace-trading-lab-broker
     ports:
       - "${STL_SOLACE_PORT:-55555}:55555"
-      - "8080:8080"   # SEMP management
-      - "8008:8008"   # Web transport
+      - "${STL_SOLACE_TLS_PORT:-55443}:55443" # SMF over TLS
+      - "${STL_SOLACE_MGMT_PORT:-8080}:8080" # SEMP management
+      - "${STL_SOLACE_WEB_PORT:-8008}:8008" # Web transport
     environment:
       - username_admin_globalaccesslevel=admin
       - username_admin_password=admin
     shm_size: "1g"
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+
+  sdkperf:
+    image: eclipse-temurin:21-jre
+    profiles: ["sdkperf"]
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - ${STL_SDKPERF_DIR:-./.sdkperf}:/sdkperf
+      - ./artifacts:/artifacts
+    entrypoint: ["/bin/bash"]
