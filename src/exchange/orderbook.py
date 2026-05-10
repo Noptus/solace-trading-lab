@@ -50,6 +50,22 @@ class OrderBookResult:
     snapshot: BookSnapshot
 
 
+class BookInvariantViolation(AssertionError):
+    """Raised when internal order book indexes disagree with queued liquidity."""
+
+
+@dataclass(frozen=True, slots=True)
+class BookInvariantReport:
+    """Compact audit summary for correctness checks and teaching output."""
+
+    symbol: str
+    active_orders: int
+    bid_levels: int
+    ask_levels: int
+    total_bid_quantity: Qty
+    total_ask_quantity: Qty
+
+
 class OrderBook:
     """Price-time priority limit order book for one symbol."""
 
@@ -308,6 +324,48 @@ class OrderBook:
             timestamp_ns=timestamp_ns if timestamp_ns is not None else self._clock(),
         )
 
+    def validate_invariants(self) -> BookInvariantReport:
+        """Audit internal book indexes, queues, and crossed-market invariants.
+
+        This method is intentionally explicit and opt-in. It is useful in tests,
+        replay audits, and teaching sessions, while the matching hot path stays
+        focused on deterministic price-time behavior.
+        """
+
+        active_orders: dict[str, RestingOrder] = {}
+        total_bid_quantity = self._validate_book_side(self._bids, Side.BUY, active_orders)
+        total_ask_quantity = self._validate_book_side(self._asks, Side.SELL, active_orders)
+
+        indexed_order_ids = set(self._orders)
+        queued_order_ids = set(active_orders)
+        if indexed_order_ids != queued_order_ids:
+            missing = sorted(queued_order_ids - indexed_order_ids)
+            stale = sorted(indexed_order_ids - queued_order_ids)
+            raise BookInvariantViolation(
+                f"order index mismatch for {self.symbol}: missing={missing}, stale={stale}"
+            )
+        for order_id, resting in self._orders.items():
+            if active_orders[order_id] is not resting:
+                raise BookInvariantViolation(f"order index points to wrong queue node: {order_id}")
+        if not indexed_order_ids.issubset(self._seen_order_ids):
+            unseen = sorted(indexed_order_ids - self._seen_order_ids)
+            raise BookInvariantViolation(f"active order ids missing from duplicate guard: {unseen}")
+        if self.best_bid_price is not None and self.best_ask_price is not None:
+            if self.best_bid_price >= self.best_ask_price:
+                raise BookInvariantViolation(
+                    f"crossed book for {self.symbol}: bid={self.best_bid_price}, "
+                    f"ask={self.best_ask_price}"
+                )
+
+        return BookInvariantReport(
+            symbol=self.symbol,
+            active_orders=len(indexed_order_ids),
+            bid_levels=len(self._bids),
+            ask_levels=len(self._asks),
+            total_bid_quantity=total_bid_quantity,
+            total_ask_quantity=total_ask_quantity,
+        )
+
     def _reject(
         self,
         order_id: OrderId,
@@ -411,3 +469,49 @@ class OrderBook:
             )
             for price in prices
         ]
+
+    def _validate_book_side(
+        self,
+        book: BookSide,
+        side: Side,
+        active_orders: dict[str, RestingOrder],
+    ) -> Qty:
+        total_quantity = 0
+        for price, queue in book.items():
+            if not queue:
+                raise BookInvariantViolation(f"empty {side} price level: {price}")
+            previous_arrival_sequence = -1
+            for resting in queue:
+                order = resting.order
+                if order.order_id in active_orders:
+                    raise BookInvariantViolation(f"duplicate queued order id: {order.order_id}")
+                if order.symbol != self.symbol:
+                    raise BookInvariantViolation(
+                        f"queued order {order.order_id} has symbol {order.symbol}, "
+                        f"expected {self.symbol}"
+                    )
+                if order.side is not side:
+                    raise BookInvariantViolation(
+                        f"queued order {order.order_id} has side {order.side}, expected {side}"
+                    )
+                if order.price != price:
+                    raise BookInvariantViolation(
+                        f"queued order {order.order_id} has price {order.price}, "
+                        f"expected level {price}"
+                    )
+                if resting.remaining_quantity <= 0:
+                    raise BookInvariantViolation(
+                        f"queued order {order.order_id} has non-positive remaining quantity"
+                    )
+                if resting.remaining_quantity > order.quantity:
+                    raise BookInvariantViolation(
+                        f"queued order {order.order_id} remaining quantity exceeds original"
+                    )
+                if resting.arrival_sequence < previous_arrival_sequence:
+                    raise BookInvariantViolation(
+                        f"FIFO sequence regression at {side} level {price}: {order.order_id}"
+                    )
+                previous_arrival_sequence = resting.arrival_sequence
+                active_orders[order.order_id] = resting
+                total_quantity += resting.remaining_quantity
+        return total_quantity
