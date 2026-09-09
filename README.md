@@ -1,8 +1,13 @@
 # Solace Trading Lab
 
+**Status: infrastructure simulator.** A hands-on project for reasoning about event ordering, price-time matching, fault injection and replay. The in-memory path is the simplest starting point; the Solace broker is optional.
+
+Hardware timings, FPGA behavior, network delays and sub-microsecond targets are modeled assumptions, not measurements of a real trading installation. This project is independent and does not imply endorsement by a trading firm or certify production readiness.
+
+
 A deterministic, event-driven trading infrastructure laboratory for studying market microstructure, order matching, and the impact of infrastructure on trading performance. Built around Solace PubSub+ for realistic message-broker semantics.
 
-**v0.2** adds Jump Trading-grade infrastructure simulation: White Rabbit precision timing, FPGA gateways, kernel bypass, SBE wire protocols, smart order routing, and full tick-to-trade measurement.
+**v0.2** adds configurable infrastructure simulation: White Rabbit precision timing, FPGA gateways, kernel bypass, SBE wire protocols, smart order routing, and full tick-to-trade measurement.
 
 ## Architecture
 
@@ -18,7 +23,7 @@ A deterministic, event-driven trading infrastructure laboratory for studying mar
     └────┬───┘ └───┬────┘ └──┬───┘ └───┬───┘ └───┬────┘
          │         │         │         │          │
     ┌────▼─────────▼─────────▼─────────▼──────────▼────┐
-    │              NEW IN v0.2 — INFRA LAYER            │
+    │              NEW IN v0.2 - INFRA LAYER            │
     ├───────────────────────────────────────────────────┤
     │  🕐 White Rabbit Clock   │  🔌 FPGA Gateway       │
     │  • Sub-ns PTP sync       │  • 5-stage pipeline    │
@@ -55,7 +60,7 @@ git clone https://github.com/Noptus/solace-trading-lab.git
 cd solace-trading-lab
 uv sync  # or: pip install -e .
 
-# Run tests (no Solace broker needed — uses in-memory bus)
+# Run tests (no Solace broker needed - uses in-memory bus)
 pytest
 
 # Start Solace PubSub+ (optional, for real broker testing)
@@ -101,7 +106,7 @@ Simulates hardware-accelerated order entry with sub-microsecond latency:
 ```python
 from gateway.fpga import FPGAGateway, RiskGate, create_gateway
 
-# Create an aggressive-profile gateway (Jump Trading style)
+# Create an aggressive-profile gateway (simulation profile)
 gw = create_gateway("aggressive")
 
 # Submit order through 5-stage FPGA pipeline
@@ -140,7 +145,7 @@ allocations = router.spray(order, ["LSE", "Eurex", "CME"], [0.5, 0.3, 0.2])
 
 ## Wire Protocol (SBE) and Hot/Cold Path
 
-Binary encoding and lock-free architecture for tick-to-trade under 1 microsecond:
+Binary encoding and hot/cold-path simulation with configurable latency targets:
 
 ```python
 from wire.protocol import SBEMessage, HotPath, ColdPath, TickToTrade
@@ -176,11 +181,11 @@ YAML-driven experiments in `scenarios/`:
 
 ## Design Principles
 
-1. **Deterministic by default** — Seeded RNGs, reproducible latency models, in-memory broker for tests
-2. **Infrastructure is the alpha** — Model everything that affects tick-to-trade: clocks, NICs, fiber, FPGA pipelines
-3. **Jump Trading grade** — Sub-microsecond order paths, hardware timestamping, kernel bypass, SBE encoding
-4. **Composable** — Each module works standalone or wired together via Solace topics
-5. **Observable** — Every event carries nanosecond timestamps, sequence numbers, and provenance
+1. **Deterministic by default** - Seeded RNGs, reproducible latency models, in-memory broker for tests
+2. **Study infrastructure effects** - Model everything that affects tick-to-trade: clocks, NICs, fiber, FPGA pipelines
+3. **Jump Trading grade** - Sub-microsecond order paths, hardware timestamping, kernel bypass, SBE encoding
+4. **Composable** - Each module works standalone or wired together via Solace topics
+5. **Observable** - Every event carries nanosecond timestamps, sequence numbers, and provenance
 
 ## Testing
 
