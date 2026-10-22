@@ -65,4 +65,4 @@ Review [docker-compose.yml](docker-compose.yml), [settings](src/common/config.py
 
 ## Development priorities
 
-The next useful work is a measured broker integration test, replay sequence validation, reconnect/gap recovery, and a benchmark with a declared workload and machine. Broader hardware simulation should follow evidence rather than add unsupported performance claims.
+Replay now rejects sequence gaps/duplicates before publishing and resumes recording at a validated sequence. The next useful work is a measured broker integration test, reconnect recovery, explicit stream identity and a benchmark with a declared workload and machine. Broader hardware simulation should follow evidence rather than add unsupported performance claims.

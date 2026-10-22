@@ -12,7 +12,9 @@ The price levels use dictionaries with min/max scans and snapshots sort prices. 
 
 The default clock is wall time. Tests and the replay demo inject a deterministic clock. Replaying fixed commands into a fresh engine produces comparable venue and market-data payloads. Transport receipt timestamps remain wall-clock observations and are excluded from the demo digest.
 
-The recorder appends JSONL with a recording sequence. The player sorts on that sequence; it does not currently reject gaps or duplicates. A recorder restart resets its counter even when appending to an existing file. Production event sourcing would require sequence continuity checks, explicit stream identity and restart semantics before relying on this format.
+The recorder appends JSONL with a contiguous recording sequence, resumes from a validated existing file, and serializes in-process callback writes. The player rejects gaps, duplicate sequence numbers and reordered records before publishing any messages. Closed recorders ignore later transport callbacks.
+
+This remains a single-process file recorder: there is no inter-process file lock, transactional state-and-event commit, stream identity or crash-recovery guarantee. A truncated last line fails validation and needs explicit recovery rather than silent repair.
 
 ## Transport semantics
 

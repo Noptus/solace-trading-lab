@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from pathlib import Path
 
@@ -28,13 +29,13 @@ class ReplayPlayer:
     def load(self) -> list[RecordedMessage]:
         """Load the recording in sequence order."""
 
-        return sorted(load_recording(self.input_path), key=lambda message: message.sequence)
+        return load_recording(self.input_path)
 
     def play(self, *, realtime: bool = False, speed: float = 1.0) -> list[RecordedMessage]:
         """Replay messages with optional timestamp pacing."""
 
-        if speed <= 0:
-            raise ValueError("speed must be positive")
+        if not math.isfinite(speed) or speed <= 0:
+            raise ValueError("speed must be finite and positive")
         messages = self.load()
         self.bus.connect()
         previous_timestamp: int | None = None
