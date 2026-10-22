@@ -1,0 +1,19 @@
+name: Tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: "0.7.19"
+      - run: uv python install 3.12
+      - run: uv sync --frozen --no-editable
+      - run: uv run --frozen --no-editable pytest
+      - run: uv run --frozen --no-editable python examples/replay_demo.py

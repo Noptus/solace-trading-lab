@@ -1,12 +1,9 @@
-"""Binary wire protocol simulation (SBE-style) and hot/cold path separation.
+"""Custom SBE-inspired binary framing and hot/cold-path simulation.
 
-Implements ultra-low-latency trading infrastructure patterns:
-- Simple Binary Encoding (SBE) for deterministic-size message serialization
-- Hot path: zero-allocation, lock-free order processing pipeline
-- Cold path: async logging, risk reporting, P&L snapshots
-- Tick-to-trade latency measurement with nanosecond precision
-
-Target: < 1 microsecond tick-to-trade (Jump Trading benchmark).
+Buffer pools, a ring and timing counters illustrate design patterns. Python
+operations allocate; concurrency and lock-free guarantees are not established.
+The header is custom and has not been validated for FIX SBE interoperability.
+No hardware performance or trading-firm benchmark is claimed.
 """
 
 from __future__ import annotations
@@ -141,10 +138,10 @@ _TEMPLATE_SIZES: dict[MessageType, int] = {
 
 
 class SBEMessage:
-    """Simple Binary Encoding (SBE) message codec.
+    """Custom fixed-width codec inspired by Simple Binary Encoding.
 
     Fixed-size binary encoding with no variable-length fields on the hot path.
-    All messages have a deterministic wire size enabling zero-copy buffer pools.
+    Each template has a deterministic wire size; encoding and decoding allocate.
 
     Header layout (10 bytes, network byte order):
         - message_type:  uint16 — template selector
@@ -383,16 +380,15 @@ class SBEMessage:
 
 
 # ---------------------------------------------------------------------------
-# Lock-free SPSC Ring Buffer
+# SPSC Ring Buffer Model
 # ---------------------------------------------------------------------------
 
 
 class SPSCRingBuffer:
-    """Single-Producer Single-Consumer lock-free ring buffer.
+    """Single-producer/single-consumer ring buffer model.
 
-    Simulates a cache-line-padded, lock-free queue for the hot path.
-    In production this would be implemented in C/Rust with memory fences;
-    here we model the semantics in pure Python with volatile-style index access.
+    Uses Python indices and pre-allocated byte slots. It has no verified
+    cross-thread memory-ordering or lock-free progress guarantee.
 
     The buffer stores fixed-size byte slots (pre-allocated).
     """
@@ -413,7 +409,7 @@ class SPSCRingBuffer:
         self._capacity: int = actual_cap
         self._mask: int = actual_cap - 1
         self._slot_size: int = slot_size
-        # Pre-allocate all buffers (zero-allocation on hot path)
+        # Pre-allocate storage; Python operations can still allocate
         self._buffer: list[bytearray] = [bytearray(slot_size) for _ in range(actual_cap)]
         self._write_idx: int = 0
         self._read_idx: int = 0
@@ -422,7 +418,7 @@ class SPSCRingBuffer:
         """Attempt to publish data to the ring buffer (producer side).
 
         Returns False if the buffer is full (back-pressure).
-        Does NOT allocate — copies into pre-allocated slot.
+        Copies into a pre-allocated slot; Python slices may allocate.
 
         Args:
             data: Raw bytes to enqueue (must be <= slot_size).
@@ -508,9 +504,9 @@ class HotPath:
     """Latency-critical order processing pipeline.
 
     Design principles (modeled, not enforced by Python runtime):
-    - Zero allocation on the happy path (pre-allocated buffer pool)
+    - Pre-allocated buffer pool (Python operations still allocate)
     - No logging, no branching on the common case
-    - Lock-free SPSC ring buffer for hand-off to cold path
+    - SPSC ring model for hand-off to cold path
     - CPU pinning to isolated core (no context switches)
     - Kernel bypass NIC model (DPDK/ef_vi style)
 
@@ -544,7 +540,7 @@ class HotPath:
             ring_capacity: SPSC ring buffer capacity for cold-path hand-off.
             pinned_core: CPU core ID for affinity pinning.
         """
-        # Pre-allocate buffer pool — no malloc on hot path
+        # Pre-allocate buffer storage
         self._pool_size: int = pool_size
         self._buffer_size: int = buffer_size
         self._buffer_pool: list[bytearray] = [bytearray(buffer_size) for _ in range(pool_size)]
@@ -565,12 +561,12 @@ class HotPath:
     def process(self, raw_bytes: bytes) -> bytes:
         """Process inbound wire bytes on the hot path.
 
-        Simulates the zero-allocation, branchless happy-path:
+        Illustrates a buffer-based processing path:
         1. Acquire pre-allocated buffer (round-robin pool)
         2. Copy inbound data (kernel-bypass NIC DMA model)
         3. Minimal validation (message type check only)
         4. Route to outbound buffer
-        5. Hand off copy to cold path via lock-free ring
+        5. Hand off copy to cold path via the ring model
 
         Args:
             raw_bytes: Inbound SBE-encoded wire bytes.
@@ -579,8 +575,7 @@ class HotPath:
             Outbound bytes (echo/ack pattern for simulation).
 
         Note:
-            In production C++/Rust, this would be < 100ns per message.
-            Python overhead is modeled but not representative of bare-metal.
+            No hardware latency is established by this Python simulation.
         """
         t0 = time.perf_counter_ns()
 

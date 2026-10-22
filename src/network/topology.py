@@ -1,11 +1,10 @@
 """Network topology and co-location modeling for exchange connectivity.
 
-Models institutional-grade network infrastructure similar to Jump Trading's
-co-location and connectivity setup. Includes realistic latency modeling,
+Explores configurable co-location and connectivity assumptions. Includes latency modeling,
 smart order routing with latency-adjusted fair value, and physical
 cross-connect asymmetry simulation.
 
-Reference latencies (one-way):
+Illustrative configured latencies (one-way; not measured here):
 - London ↔ Frankfurt: ~4.2ms (fiber), ~3.8ms (microwave)
 - Chicago ↔ New York: ~6.5ms (fiber), ~4.1ms (microwave)  
 - London ↔ New York: ~32ms (subsea fiber)
@@ -603,12 +602,12 @@ class SmartOrderRouter:
     3. Queue position estimates
     4. Latency-adjusted fair value calculation
 
-    Jump Trading style: prefer the venue where you have the lowest
+    Routing heuristic: prefer the venue where the model gives the lowest
     tick-to-trade latency, accepting slightly worse prices if the
     latency advantage provides edge on expected price movement.
 
     Example:
-        >>> router = SmartOrderRouter(topology, participant='JumpTrading')
+        >>> router = SmartOrderRouter(topology, participant='research-client')
         >>> decision = router.route(order, books)
         >>> allocations = router.spray(order, ['CME', 'NASDAQ'], [0.6, 0.4])
     """

@@ -1,17 +1,15 @@
 """
 FPGA Gateway Simulation — Sub-Microsecond Order Entry Infrastructure.
 
-Models hardware-accelerated order entry paths inspired by Jump Trading / Citadel
-Securities FPGA-based trading infrastructure. Simulates:
+Explores configured hardware-style order entry paths. Simulates:
 
 - Gate-level pipeline stages with deterministic latency
 - Kernel-bypass networking (DPDK/ef_vi style)
 - Hardware NIC timestamping at ingress/egress
 - Pre-trade risk checks in FPGA fabric (sub-100ns)
 
-This module is a *simulation* — it models timing characteristics faithfully
-but runs in software. Useful for backtesting latency-sensitive strategies
-and validating order flow logic before FPGA synthesis.
+This is a software timing model with assumed delays, not a validated hardware
+implementation. It does not establish readiness for FPGA synthesis.
 
 Architecture reference:
     Market Data NIC → FPGA Parse → Validate → Risk → Serialize → TX NIC
